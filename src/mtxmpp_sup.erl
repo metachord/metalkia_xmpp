@@ -1,28 +1,74 @@
-
+%%%-------------------------------------------------------------------
+%%% @author Maxim Treskin <mtreskin@metachord.com>
+%%% @copyright (C) 2011, Maxim Treskin
+%%% @doc
+%%%
+%%% @end
+%%% Created : 18 Oct 2011 by Maxim Treskin <mtreskin@metachord.com>
+%%%-------------------------------------------------------------------
 -module(mtxmpp_sup).
+
+-include_lib("metalkia_core/include/mt_log.hrl").
 
 -behaviour(supervisor).
 
-%% API
 -export([start_link/0]).
 
-%% Supervisor callbacks
+-export([
+         start_cmd/1
+        ]).
+
 -export([init/1]).
 
-%% Helper macro for declaring children of supervisor
--define(CHILD(I, Type), {I, {I, start_link, []}, permanent, 5000, Type, [I]}).
-
-%% ===================================================================
-%% API functions
-%% ===================================================================
+-define(SERVER, ?MODULE).
 
 start_link() ->
-    supervisor:start_link({local, ?MODULE}, ?MODULE, []).
+  supervisor:start_link({local, ?SERVER}, ?MODULE, []).
 
-%% ===================================================================
-%% Supervisor callbacks
-%% ===================================================================
+start_cmd(Args) ->
+  supervisor:start_child(mtxmpp_cmd_sup, [Args]).
+
+init([mtxmpp_cmd = ModName]) ->
+  ?DBG("Command Worker supervisor start", []),
+  RestartStrategy = simple_one_for_one,
+  MaxRestarts = 10,
+  MaxSecondsBetweenRestarts = 10,
+  SupFlags = {RestartStrategy, MaxRestarts, MaxSecondsBetweenRestarts},
+
+  Restart = temporary,
+  Shutdown = 2000,
+  Type = worker,
+
+  AChild =
+    [
+     {ModName, {ModName, start_link, []},
+      Restart, Shutdown, Type, [ModName]}
+    ],
+  {ok, {SupFlags, AChild}};
 
 init([]) ->
-    {ok, { {one_for_one, 5, 10}, []} }.
+  ?DBG("Start Metalk XMPP sup", []),
+  RestartStrategy = one_for_one,
+  MaxRestarts = 1000,
+  MaxSecondsBetweenRestarts = 3600,
 
+  SupFlags = {RestartStrategy, MaxRestarts, MaxSecondsBetweenRestarts},
+
+  Restart = permanent,
+  Shutdown = 2000,
+  Type = worker,
+
+  Children =
+    [
+     {mtxmpp_client, {mtxmpp_client, start_link, []},
+      Restart, Shutdown, Type, [mtxmpp_client]},
+
+     {mtxmpp_cmd_sup,
+      {supervisor, start_link,
+       [{local, mtxmpp_cmd_sup}, ?MODULE, [mtxmpp_cmd]]},
+      Restart, Shutdown, supervisor, [?MODULE]}
+    ],
+
+  {ok, {SupFlags, Children}}.
+
+%%% Internal functions
