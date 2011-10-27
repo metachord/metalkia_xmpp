@@ -21,7 +21,9 @@
 -export([start_link/1]).
 
 -export([
-         spark/2
+         spark/2,
+         available/2,
+         unavailable/2
         ]).
 
 -export([
@@ -34,6 +36,7 @@
         ]).
 
 -define(SERVER, ?MODULE).
+-define(CMD_TIMEOUT, 60000).
 
 -record(state, {
           jid
@@ -54,6 +57,24 @@ spark(Session, #received_packet{from = From} = Packet) ->
       mtxmpp_sup:start_cmd([Session, Packet])
   end.
 
+-spec available(pid(), #received_packet{}) -> ok.
+available(_Session, #received_packet{from = _From} = _Packet) ->
+  %% FromJID = exmpp_jid:make(From),
+  %% ?DBG("Check data availability to send to JID ~p", [FromJID]),
+  %% TODO
+  ok.
+
+-spec unavailable(pid(), #received_packet{}) -> ok.
+unavailable(Session, #received_packet{from = From} = Packet) ->
+  ?DBG("Stop worker", []),
+  FromJID = exmpp_jid:make(From),
+  Pid = gproc:lookup_local_name(FromJID),
+  if is_pid(Pid) ->
+      gen_server:cast(Pid, {stop, Session, Packet});
+     true ->
+      ok
+  end.
+
 %%% gen_server callbacks
 
 init([Session, #received_packet{from = From} = Packet] = Args) ->
@@ -71,11 +92,18 @@ handle_cast({cmd, Session, #received_packet{} = Packet},
             #state{jid = JID} = State) ->
   ?DBG("Packet from:~n~p~n~p", [JID, Packet]),
   packet_action(Session, JID, Packet),
-  {noreply, State};
+  {noreply, State, ?CMD_TIMEOUT};
+handle_cast({stop, _Session, #received_packet{} = _Packet},
+            #state{jid = JID} = State) ->
+  ?DBG("JID ~p unavailable", [JID]),
+  {stop, normal, State};
 handle_cast(_Msg, State) ->
   ?DBG("Unhandled cast:~n~p", [_Msg]),
   {noreply, State}.
 
+handle_info(timeout, #state{jid = JID} = State) ->
+  ?DBG("Stop CMD for ~p on timeout", [JID]),
+  {stop, normal, State};
 handle_info(_Info, State) ->
   {noreply, State}.
 
@@ -124,26 +152,74 @@ do_cmd(_JID, From, #mt_cmd{body = Body} = Cmds) ->
     [#xmlcdata{cdata = <<"NICK", Rest/binary>>}|_] ->
       [#xmlcdata{cdata = <<"Set Nickname to: ", Rest/binary>>}];
     [#xmlcdata{cdata = <<"#", _/binary>> = CData}|_] ->
-      Match = re:run(CData, "#([[:digit:]]+)(/([[:digit:]]+)?)?\s*(.*)\s*", [{capture, [1,3,4], binary}, dotall]),
+      Match = re:run(CData, "#([[:digit:]]+)(/([[:digit:]]+)?)?\s*(.*)\s*", [{capture, [1,3,4], binary}, dotall, unicode]),
       ?DBG("Match:~n~p", [Match]),
       case Match of
-        {match, [PostId, <<>>, <<>>]} ->
-          [#xmlcdata{cdata = <<"Show post #", PostId/binary>>}];
+        {match, [PostId, <<>> = CommentId, <<>>]} ->
+          cmd_show(PostId, CommentId);
         {match, [PostId, CommentId, <<>>]} ->
-          [#xmlcdata{cdata = <<"Show comment #", PostId/binary, "/", CommentId/binary>>}];
-        {match, [PostId, <<>>, _CommentReply]} ->
-          [#xmlcdata{cdata = <<"Post reply #", PostId/binary>>}];
-        {match, [PostId, CommentId, _CommentReply]} ->
-          [#xmlcdata{cdata = <<"Comment reply #", PostId/binary, "/", CommentId/binary>>}];
+          cmd_show(PostId, CommentId);
+        {match, [PostId, <<>> = CommentId, CommentReply]} ->
+          cmd_reply(PostId, CommentId, CommentReply);
+        {match, [PostId, CommentId, CommentReply]} ->
+          cmd_reply(PostId, CommentId, CommentReply);
         _Other ->
           ?DBG("Bad Match:~n~p", [_Other]),
           [#xmlcdata{cdata = <<"Bad command">>}]
       end;
-    _ ->
-      NewPostId = <<"12345">>,
-      [#xmlcdata{cdata = <<"New message posted: #", NewPostId/binary>>}]
+    [#xmlcdata{cdata = <<BCT, _/binary>> = BlogsCircsTags} | PostData]
+      when BCT =:= $% orelse
+           BCT =:= $$ orelse
+           BCT =:= $* ->
+      {Blogs, Circles, Tags} =
+        lists:foldl(fun(<<$%, Blog/binary>>, {B, C, T}) ->
+                        {B++[Blog], C, T};
+                       (<<$$, Circle/binary>>, {B, C, T}) ->
+                        {B, C++[Circle], T};
+                       (<<$*, Tag/binary>>, {B, C, T}) ->
+                        {B, C, T++[Tag]}
+                    end, {[], [], []},
+                    re:split(BlogsCircsTags, "[[:space:]]+", [unicode])),
+      ?DBG("Blogs: ~p~nCircles: ~p~nTags: ~p", [Blogs, Circles, Tags]),
+      cmd_post(Blogs, Circles, Tags, PostData);
+    PostData ->
+      cmd_post([], [], [], PostData)
   end.
 
+cmd_show(PostId, <<>>) ->
+  case mtriak:get_post(PostId) of
+    #mt_post{body = Body,
+             comments = Comments} ->
+      ComLen = length(Comments),
+      ?DBG("Post ~p:~n~p", [PostId, Body]),
+      [
+       #xmlcdata{cdata = Body},
+       #xmlcdata{cdata = <<"\n">>},
+       #xmlcdata{cdata = iolist_to_binary(["#", PostId, if (ComLen>0) -> [" (", integer_to_list(ComLen), " replies)"]; true -> [] end])}
+      ];
+    {error, notfound} ->
+      [#xmlcdata{cdata = iolist_to_binary(["Post #", PostId, " not found"])}]
+  end;
+cmd_show(PostId, CommentId) ->
+  [#xmlcdata{cdata = <<"Show comment #", PostId/binary, "/", CommentId/binary>>}].
+
+cmd_reply(PostId, <<>>, _Reply) ->
+  [#xmlcdata{cdata = <<"Post reply #", PostId/binary>>}];
+cmd_reply(PostId, CommentId, _Reply) ->
+  [#xmlcdata{cdata = <<"Comment reply #", PostId/binary, "/", CommentId/binary>>}].
+
+
+cmd_post(Blogs, Circles, Tags, PostData) ->
+  NewPostId = <<"12345">>,
+  [
+   #xmlcdata{cdata = <<"\n">>},
+   #xmlcdata{cdata = <<"New message posted: #", NewPostId/binary>>},
+   #xmlcdata{cdata = <<"\n">>},
+   #xmlcdata{cdata = if (length(Blogs) > 0) -> iolist_to_binary([<<"% ">>, [[" ", B] || B <- Blogs], "\n"]); true -> <<>> end},
+   #xmlcdata{cdata = if (length(Circles) > 0) -> iolist_to_binary([<<"$ ">>, [[" ", C] || C <- Circles], "\n"]); true -> <<>> end},
+   #xmlcdata{cdata = if (length(Tags) > 0) -> iolist_to_binary([<<"* ">>, [[" ", T] || T <- Tags], "\n"]); true -> <<>> end}
+   | PostData
+  ].
 
 cmd_help() ->
   [#xmlcdata{cdata = iolist_to_binary(R)} ||
@@ -164,4 +240,3 @@ cmd_help() ->
        "\n",
        "#12345/14 <reply>    — Reply on 14-th comment of post #12345"
       ]].
-

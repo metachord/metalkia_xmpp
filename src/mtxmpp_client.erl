@@ -115,7 +115,7 @@ handle_info(#received_packet{
                packet_type = presence,
                type_attr = TypeAttr,
                from = From
-              },
+              } = RPacket,
             #state{
                     session = Session
                   } = State) ->
@@ -128,9 +128,11 @@ handle_info(#received_packet{
       presence_subscribed(Session, FromJID),
       presence_subscribe(Session, FromJID);
     "available" ->
-      ok;
+      %% ?DBG("Available ~p", [FromJID]),
+      mtxmpp_cmd:available(Session, RPacket);
     "unavailable" ->
-      ok;
+      ?DBG("Unavailable ~p", [FromJID]),
+      mtxmpp_cmd:unavailable(Session, RPacket);
     _Other ->
       ?DBG("Unhandled TypeAttr ~p", [_Other]),
       ok
