@@ -179,6 +179,10 @@ handle_info(#received_packet{
   end,
   {noreply, State};
 
+handle_info({stream_error, Error} = ErrReason, State) ->
+  ?DBG("Stream Error: ~p", [Error]),
+  {stop, ErrReason, State};
+
 handle_info(_Info, State) ->
   ?DBG("Unhandled info: ~p", [_Info]),
   {noreply, State}.
