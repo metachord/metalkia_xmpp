@@ -17,6 +17,7 @@
 -include_lib("exmpp/include/exmpp_client.hrl").
 -include_lib("exmpp/include/exmpp_jid.hrl").
 
+-include("mtxmpp.hrl").
 
 -export([start_link/1]).
 
@@ -187,30 +188,74 @@ do_cmd(_JID, From, #mt_cmd{body = Body} = Cmds) ->
   end.
 
 cmd_show(PostId, <<>>) ->
-  case mtriak:get_post(PostId) of
+  case mtc_entry:sget(mt_post, PostId) of
     #mt_post{body = Body,
+             author = Author,
              comments = Comments} ->
       ComLen = length(Comments),
       ?DBG("Post ~p:~n~p", [PostId, Body]),
       [
+       #xmlcdata{cdata = <<"@", (Author#mt_person.name)/binary>>},
+       #xmlcdata{cdata = <<"\n">>},
        #xmlcdata{cdata = Body},
        #xmlcdata{cdata = <<"\n">>},
        #xmlcdata{cdata = iolist_to_binary(["#", PostId, if (ComLen>0) -> [" (", integer_to_list(ComLen), " replies)"]; true -> [] end])}
       ];
-    {error, notfound} ->
+    undefined ->
       [#xmlcdata{cdata = iolist_to_binary(["Post #", PostId, " not found"])}]
   end;
 cmd_show(PostId, CommentId) ->
-  [#xmlcdata{cdata = <<"Show comment #", PostId/binary, "/", CommentId/binary>>}].
+  case mtc_entry:sget(mt_post, PostId) of
+    #mt_post{body = _Body,
+             author = _Author,
+             comments = Comments} ->
+      CID = list_to_integer(binary_to_list(CommentId)),
+      case [Comment || #mt_comment{id = Id} = Comment <- Comments, Id =:= CID] of
+        [#mt_comment{author = Author, body = CommentBody}] ->
+          ?DBG("Comment #~p/~p:~n~p", [PostId, CommentId, CommentBody]),
+          [
+           #xmlcdata{cdata = <<"@", (Author#mt_person.name)/binary>>},
+           #xmlcdata{cdata = <<"\n">>},
+           #xmlcdata{cdata = CommentBody},
+           #xmlcdata{cdata = <<"\n">>},
+           #xmlcdata{cdata = iolist_to_binary(["#", PostId, "/", CommentId])}
+          ];
+        [] ->
+          [#xmlcdata{cdata = iolist_to_binary(["Comment #", PostId, "/", CommentId, " not found"])}]
+      end;
+    undefined ->
+      [#xmlcdata{cdata = iolist_to_binary(["Post #", PostId, " not found"])}]
+  end.
 
-cmd_reply(PostId, <<>>, _Reply) ->
-  [#xmlcdata{cdata = <<"Post reply #", PostId/binary>>}];
-cmd_reply(PostId, CommentId, _Reply) ->
+cmd_reply(PostId, <<>>, Reply) ->
+  Author = #mt_person{
+    id = 1,
+    name = <<"Zert">>
+   },
+  Comment = #mt_comment{
+    post_id = PostId,
+    parents = [PostId],
+    author = Author,
+    body = Reply,
+    origin = ?MT_ORIGIN
+   },
+  CommentId = mtc_entry:sput(Comment),
+  [#xmlcdata{cdata = <<"Post reply #", PostId/binary, "/", CommentId/binary>>}];
+cmd_reply(PostId, CommentId, _ReplyData) ->
   [#xmlcdata{cdata = <<"Comment reply #", PostId/binary, "/", CommentId/binary>>}].
 
 
 cmd_post(Blogs, Circles, Tags, PostData) ->
-  NewPostId = <<"12345">>,
+  Author = #mt_person{
+    id = 1,
+    name = <<"Zert">>
+   },
+  Post = #mt_post{
+    author = Author,
+    body = iolist_to_binary([CData || #xmlcdata{cdata = CData} <- PostData]),
+    origin = ?MT_ORIGIN
+   },
+  NewPostId = mtc_entry:sput(Post),
   [
    #xmlcdata{cdata = <<"\n">>},
    #xmlcdata{cdata = <<"New message posted: #", NewPostId/binary>>},
