@@ -58,16 +58,25 @@ init([]) ->
   Shutdown = 2000,
   Type = worker,
 
-  Children =
+  ChildSup =
     [
-     {mtxmpp_client, {mtxmpp_client, start_link, []},
-      Restart, Shutdown, Type, [mtxmpp_client]},
-
      {mtxmpp_cmd_sup,
       {supervisor, start_link,
        [{local, mtxmpp_cmd_sup}, ?MODULE, [mtxmpp_cmd]]},
       Restart, Shutdown, supervisor, [?MODULE]}
     ],
+
+  IsEnabled = application:get_env(enabled),
+  Children =
+    if IsEnabled ->
+        [
+         {mtxmpp_client, {mtxmpp_client, start_link, []},
+          Restart, Shutdown, Type, [mtxmpp_client]} |
+         ChildSup
+        ];
+       true ->
+        ChildSup
+    end,
 
   {ok, {SupFlags, Children}}.
 
