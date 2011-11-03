@@ -9,7 +9,7 @@
                   kernel,
                   stdlib,
                   exmpp,
-                  metalkia_riak
+                  metalkia_core
                  ]},
   {mod, { mtxmpp_app, []}},
   {env, []}

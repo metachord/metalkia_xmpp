@@ -2,7 +2,7 @@
              [{description,"Metalkia XMPP interface"},
               {vsn,"0.1"},
               {registered,[]},
-              {applications,[kernel,stdlib,exmpp,metalkia_riak]},
+              {applications,[kernel,stdlib,exmpp,metalkia_core]},
               {mod,{mtxmpp_app,[]}},
               {env,[]},
               {modules,[mtxmpp_app,mtxmpp_client,mtxmpp_cmd,mtxmpp_sup]}]}.
