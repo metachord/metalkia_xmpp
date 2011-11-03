@@ -5,4 +5,5 @@
               {applications,[kernel,stdlib,exmpp,metalkia_core]},
               {mod,{mtxmpp_app,[]}},
               {env,[]},
-              {modules,[mtxmpp_app,mtxmpp_client,mtxmpp_cmd,mtxmpp_sup]}]}.
+              {modules,[mtxmpp,mtxmpp_app,mtxmpp_client,mtxmpp_cmd,
+                        mtxmpp_sup]}]}.

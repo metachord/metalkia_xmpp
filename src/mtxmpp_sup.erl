@@ -66,7 +66,7 @@ init([]) ->
       Restart, Shutdown, supervisor, [?MODULE]}
     ],
 
-  IsEnabled = application:get_env(enabled),
+  IsEnabled = mtxmpp:get_env(enabled, false),
   Children =
     if IsEnabled ->
         [
